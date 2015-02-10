@@ -6,6 +6,8 @@ import logging
 import json
 import requests
 from hashlib import sha1
+from mock import Mock
+import requests_mock
 
 from gevent.pywsgi import WSGIServer
 from gevent.baseserver import parse_address
@@ -32,6 +34,11 @@ def filter_by_bidder_id(bids, bidder_id):
 
 def filter_start_bids_by_bidder_id(bids, bidder):
     """
+    >>> bids = [{"bidders":[ {"id":{"name": "22222"}},]}, {"bidders":[{"id":{"name": "1111"}},]}, {"bidders":[{"id":{"name": "22222"}},]}]
+    >>> filter_start_bids_by_bidder_id(bids, 22222)                                                                   
+    []
+    >>> filter_start_bids_by_bidder_id(bids, 1111)                                                                    
+    []
     """
     return [bid for bid in bids
             if bid['bidders'][0]['id']['name'] == bidder]
@@ -123,6 +130,13 @@ def get_latest_start_bid_for_bidder(bids, bidder):
 
 
 def get_tender_data(tender_url, user="", password="", retry_count=10):
+    """
+    >>> with requests_mock.Mocker() as m:
+    ...    m.register_uri('GET', 'mock://test.com', [{'text': '{}', 'status_code': 500}, {'text': '{}', 'status_code': 403}, {'text': '{}', 'status_code': 400}, {'text': '{}', 'status_code': 200}])
+    ...    get_tender_data('mock://test.com', user="user", password="password", retry_count=10)
+    <requests_mock.adapter._Matcher object at 0xb7708cec>
+    {}                                                                                 
+    """
     if user or password:
         auth = (user, password)
     else:
@@ -158,10 +172,18 @@ def get_tender_data(tender_url, user="", password="", retry_count=10):
         logging.info("Wait before retry...")
         sleep(pow(iteration, 2))
     return None
+    
 
 
 def patch_tender_data(tender_url, data, user="", password="", retry_count=10,
                       method='patch'):
+    """
+    >>> with requests_mock.Mocker() as m:
+    ... m.register_uri('PATCH', 'mock://test.com', [{'text': '{}', 'status_code': 500}, {'text': 'Can\'t get auction info', 'status_code': 403}, {'text': '{}', 'status_code': 400}, {'text': '{}', 'status_code': 200}])
+    ... ut.patch_tender_data('mock://test.com', {}, user="user", password="password", retry_count=10, method='patch')
+    <requests_mock.adapter._Matcher object at 0xb7708cec>
+    {}                                                                  
+    """
     if user or password:
         auth = (user, password)
     else:
