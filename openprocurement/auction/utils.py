@@ -34,13 +34,13 @@ def filter_by_bidder_id(bids, bidder_id):
 
 def filter_start_bids_by_bidder_id(bids, bidder):
     """
-    >>> bids = [{"bidders":[ {"id":{"name": "22222"}},]}, {"bidders":[{"id":{"name": "1111"}},]}, {"bidders":[{"id":{"name": "22222"}},]}]
-    >>> filter_start_bids_by_bidder_id(bids, 22222)                                                                   
-    []
-    >>> filter_start_bids_by_bidder_id(bids, 1111)                                                                    
+    >>> bids = [{"bidders":[{"id":{"name": "22222"}},]}, {"bidders":[{"id":{"name": "1111"}},]},]
+    >>> filter_start_bids_by_bidder_id(bids, "22222")     
+    [{'bidders': [{'id': {'name': '22222'}}]}]
+    >>> filter_start_bids_by_bidder_id(bids, 22222)
     []
     """
-    return [bid for bid in bids
+    return [bid for bid in bids 
             if bid['bidders'][0]['id']['name'] == bidder]
 
 
@@ -116,15 +116,35 @@ def sorting_start_bids_by_amount(bids, reverse=True):
 
 
 def sorting_by_time(bids, reverse=True):
+    """
+    >>> bids = [{"time": "2015-01-04T15:40:44Z", 'bidder_id': '1'}, 
+    ... {"time": "2015-01-04T15:42:44Z", 'bidder_id': '2'}, 
+    ... {"time": "2015-01-04T15:44:44Z", 'bidder_id': '3'}]
+    
+    >>> sorting_by_time(bids, reverse=True) # doctest: +NORMALIZE_WHITESPACE
+    [{'bidder_id': '3', 'time': '2015-01-04T15:44:44Z'}, 
+    {'bidder_id': '2', 'time': '2015-01-04T15:42:44Z'}, 
+    {'bidder_id': '1', 'time': '2015-01-04T15:40:44Z'}]
+    """
     return sorted(bids, key=get_time, reverse=reverse)
 
 
 def get_latest_bid_for_bidder(bids, bidder_id):
+    """
+    >>> bids = [
+    ... {"bidder_id": "1", "amount": 100, "time": "2015-01-04T15:40:44Z",},
+    ... {"bidder_id": "1", "amount": 200, "time": "2015-01-04T15:40:42Z",},
+    ... {"bidder_id": "2", "amount": 101,"time": "2015-01-04T15:40:44Z",}]
+    
+    >>> get_latest_bid_for_bidder (bids, '1')
+    {'amount': 100, 'bidder_id': '1', 'time': '2015-01-04T15:40:44Z'}
+    """
     return sorted(filter_by_bidder_id(bids, bidder_id),
                   key=get_time, reverse=True)[0]
 
 
 def get_latest_start_bid_for_bidder(bids, bidder):
+   
     return sorted(filter_start_bids_by_bidder_id(bids, bidder),
                   key=get_time, reverse=True)[0]
 
@@ -133,8 +153,8 @@ def get_tender_data(tender_url, user="", password="", retry_count=10):
     """
     >>> with requests_mock.Mocker() as m:
     ...    m.register_uri('GET', 'mock://test.com', [{'text': '{}', 'status_code': 500}, {'text': '{}', 'status_code': 403}, {'text': '{}', 'status_code': 400}, {'text': '{}', 'status_code': 200}])
-    ...    get_tender_data('mock://test.com', user="user", password="password", retry_count=10)
-    <requests_mock.adapter._Matcher object at 0xb7708cec>
+    ...    get_tender_data('mock://test.com', user="user", password="password", retry_count=10) # doctest: +ELLIPSIS 
+    <requests_mock.adapter._Matcher object at ... >
     {}                                                                                 
     """
     if user or password:
@@ -179,9 +199,9 @@ def patch_tender_data(tender_url, data, user="", password="", retry_count=10,
                       method='patch'):
     """
     >>> with requests_mock.Mocker() as m:
-    ... m.register_uri('PATCH', 'mock://test.com', [{'text': '{}', 'status_code': 500}, {'text': 'Can\'t get auction info', 'status_code': 403}, {'text': '{}', 'status_code': 400}, {'text': '{}', 'status_code': 200}])
-    ... ut.patch_tender_data('mock://test.com', {}, user="user", password="password", retry_count=10, method='patch')
-    <requests_mock.adapter._Matcher object at 0xb7708cec>
+    ...    m.register_uri('PATCH', 'mock://test.com', [{'text': '{}', 'status_code': 500}, {'text': 'Cant get auction info', 'status_code': 403}, {'text': '{}', 'status_code': 400}, {'text': '{}', 'status_code': 200}])
+    ...    patch_tender_data('mock://test.com', {}, user="user", password="password", retry_count=10, method='patch') # doctest:+ELLIPSIS
+    <requests_mock.adapter._Matcher object at ... >
     {}                                                                  
     """
     if user or password:
@@ -222,6 +242,17 @@ def patch_tender_data(tender_url, data, user="", password="", retry_count=10,
 
 
 def do_until_success(func, args=(), kw={}, repeat=10, sleep_seconds=10):
+    """
+    >>> do_until_success(calculate_hash, args=('1234','5678'), kw={}, repeat=5, sleep_seconds=10)
+    '85512f17e19d85600a7e92175fc16d0c3d900661'
+    >>> do_until_success(calculate_hash, args=(), kw={}, repeat=1, sleep_seconds=5)
+    
+    
+    
+    
+    
+    ERROR:root:Error calculate_hash() takes exactly 2 arguments (0 given) 
+    """
     while True:
         try:
             return func(*args, **kw)
@@ -239,12 +270,19 @@ def do_until_success(func, args=(), kw={}, repeat=10, sleep_seconds=10):
 
 
 def calculate_hash(bidder_id, hash_secret):
+    """
+    >>> calculate_hash('1234', '5678')
+    '85512f17e19d85600a7e92175fc16d0c3d900661'
+    """
     digest = sha1(hash_secret)
     digest.update(bidder_id)
     return digest.hexdigest()
 
 
 def get_lisener(port, host=''):
+    """
+   
+    """
     lisener = None
     while lisener is None:
         family, address = parse_address((host, port))
