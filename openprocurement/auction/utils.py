@@ -355,6 +355,11 @@ def delete_mapping(redis_url, auction_id):
 
 
 def prepare_extra_journal_fields(headers):
+    """
+    >>> headers = {'X-Request-ID':'1','X-Clint-Request-ID':'2'}
+    >>> prepare_extra_journal_fields(headers)
+    {'JOURNAL_CLIENT_REQUEST_ID': '2', 'JOURNAL_REQUEST_ID': '1'}
+    """
     extra = {}
     for key in EXTRA_LOGGING_VALUES:
         if key in headers:
