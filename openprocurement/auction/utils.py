@@ -12,7 +12,15 @@ import requests_mock
 from gevent.pywsgi import WSGIServer
 from gevent.baseserver import parse_address
 from redis import Redis
+import uuid
 
+EXTRA_LOGGING_VALUES = {
+    'X-Request-ID': 'JOURNAL_REQUEST_ID',
+    'X-Clint-Request-ID': 'JOURNAL_CLIENT_REQUEST_ID'
+}
+
+def generate_request_id(prefix=b'auction-req-'):
+    return prefix + str(uuid.uuid4()).encode('ascii')
 
 def filter_by_bidder_id(bids, bidder_id):
     """
@@ -149,7 +157,8 @@ def get_latest_start_bid_for_bidder(bids, bidder):
                   key=get_time, reverse=True)[0]
 
 
-def get_tender_data(tender_url, user="", password="", retry_count=10):
+def get_tender_data(tender_url, user="", password="", retry_count=10,
+                    request_id=None):
     """
     >>> with requests_mock.Mocker() as m:
     ...    mocked_response = m.register_uri('GET', 'mock://test.com', [
@@ -160,46 +169,55 @@ def get_tender_data(tender_url, user="", password="", retry_count=10):
     ...    response = get_tender_data('mock://test.com', user="user", password="password", retry_count=10)
     ...    assert response == {u'tex1':u'OK'}
     """
+    if not request_id:
+        request_id = generate_request_id()
+    extra_headers = {'content-type': 'application/json', 'X-Client-Request-ID': request_id}
+
     if user or password:
         auth = (user, password)
     else:
         auth = None
     for iteration in xrange(retry_count):
         try:
-            logging.info("Get data from {}".format(tender_url))
-            response = requests.get(tender_url, auth=auth,
+            logging.info("Get data from {}".format(tender_url),
+                         extra={"JOURNAL_REQUEST_ID": request_id})
+            response = requests.get(tender_url, auth=auth, headers=extra_headers,
                                     timeout=300)
             if response.ok:
                 logging.info("Response from {}: status: {} text: {}".format(
-                    tender_url, response.status_code, response.text)
+                    tender_url, response.status_code, response.text),
+                    extra={"JOURNAL_REQUEST_ID": request_id}
                 )
                 return response.json()
             else:
                 logging.error("Response from {}: status: {} text: {}".format(
-                    tender_url, response.status_code, response.text)
+                    tender_url, response.status_code, response.text),
+                    extra={"JOURNAL_REQUEST_ID": request_id}
                 )
                 if response.status_code == 403:
                     for error in response.json()["errors"]:
                         if error["description"].startswith('Can\'t get auction info'):
                             return None
         except requests.exceptions.RequestException, e:
-            logging.error("Request error {} error: {}".format(
-                tender_url,
-                e)
+            logging.error(
+                "Request error {} error: {}".format(tender_url, e),
+                extra={"JOURNAL_REQUEST_ID": request_id}
             )
         except Exception, e:
-            logging.error("Unhandled error {} error: {}".format(
-                tender_url,
-                e)
+            logging.error(
+                "Unhandled error {} error: {}".format(tender_url, e),
+                extra={"JOURNAL_REQUEST_ID": request_id}
             )
-        logging.info("Wait before retry...")
+        logging.info("Wait before retry...",
+                     extra={"JOURNAL_REQUEST_ID": request_id})
         sleep(pow(iteration, 2))
     return None
     
-
-
-def patch_tender_data(tender_url, data, user="", password="", retry_count=10,
-                      method='patch'):
+    
+    
+    
+def patch_tender_data(tender_url, data=None, files=None, user="", password="",
+                      retry_count=10, method='patch', request_id=None):
     """
     >>> with requests_mock.Mocker() as m:
     ...    mocked_response = m.register_uri('PATCH', 'mock://test.com', [
@@ -210,41 +228,62 @@ def patch_tender_data(tender_url, data, user="", password="", retry_count=10,
     ...    response = patch_tender_data('mock://test.com', {}, user="user", password="password", retry_count=10, method='patch') 
     ...    assert response == {}
     """
+    if not request_id:
+        request_id = generate_request_id()
+    extra_headers = {'X-Client-Request-ID': request_id}
+    if data:
+        extra_headers['content-type'] = 'application/json'
     if user or password:
         auth = (user, password)
     else:
         auth = None
     for iteration in xrange(retry_count):
         try:
-            response = getattr(requests, method)(
-                tender_url,
-                auth=auth,
-                headers={'content-type': 'application/json'},
-                data=json.dumps(data),
-                timeout=300
-            )
+            if data:
+                response = getattr(requests, method)(
+                    tender_url,
+                    auth=auth,
+                    headers=extra_headers,
+                    data=json.dumps(data),
+                    timeout=300
+                )
+            else:
+                response = getattr(requests, method)(
+                    tender_url,
+                    auth=auth,
+                    headers=extra_headers,
+                    files=files,
+                    timeout=300
+                )
 
             if response.ok:
                 logging.info("Response from {}: status: {} text: {}".format(
-                    tender_url, response.status_code, response.text)
+                    tender_url, response.status_code, response.text),
+                    extra={"JOURNAL_REQUEST_ID": request_id}
                 )
                 return response.json()
             else:
                 logging.error("Response from {}: status: {} text: {}".format(
-                    tender_url, response.status_code, response.text)
+                    tender_url, response.status_code, response.text),
+                    extra={"JOURNAL_REQUEST_ID": request_id}
                 )
         except requests.exceptions.RequestException, e:
             logging.error("Request error {} error: {}".format(
                 tender_url,
-                e)
+                e),
+                extra={"JOURNAL_REQUEST_ID": request_id}
             )
         except Exception, e:
             logging.error("Unhandled error {} error: {}".format(
                 tender_url,
-                e)
+                e),
+                extra={"JOURNAL_REQUEST_ID": request_id}
             )
-        logging.info("Wait before retry...")
+        logging.info("Wait before retry...",
+                     extra={"JOURNAL_REQUEST_ID": request_id})
         sleep(pow(iteration, 2))
+
+
 
 
 def do_until_success(func, args=(), kw={}, repeat=10, sleep_seconds=10):
@@ -313,3 +352,11 @@ def create_mapping(redis_url, auction_id, auction_url):
 def delete_mapping(redis_url, auction_id):
     mapings = Redis.from_url(redis_url)
     return mapings.delete(auction_id)
+
+
+def prepare_extra_journal_fields(headers):
+    extra = {}
+    for key in EXTRA_LOGGING_VALUES:
+        if key in headers:
+            extra[EXTRA_LOGGING_VALUES[key]] = headers[key]
+    return extra

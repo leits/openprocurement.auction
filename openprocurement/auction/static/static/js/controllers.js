@@ -1,6 +1,6 @@
 var evtSrc = {};
 
-dataLayer = dataLayer || [];
+var dataLayer = dataLayer || [];
 
 angular.module('auction').controller('AuctionController', [
   '$scope', 'AuctionConfig', 'AuctionUtils',
@@ -13,9 +13,10 @@ angular.module('auction').controller('AuctionController', [
   ) {
     if (AuctionUtils.inIframe()){
       $log.error('Starts in iframe');
-      window.open(location.href, '_blank')
+      window.open(location.href, '_blank');
       return false;
     }
+    $scope.lang = 'uk';
     $scope.growlMessages = growlMessages;
     growlMessages.initDirective(0, 10);
     $scope.allow_bidding = true;
@@ -24,12 +25,13 @@ angular.module('auction').controller('AuctionController', [
     $rootScope.form = {};
     $rootScope.alerts = [];
     $scope.db = new PouchDB(AuctionConfig.remote_db);
-    if ($translate.storage().get($translate.storageKey()) != "undefined"){
-      $scope.lang = $translate.storage().get($translate.storageKey());
-    } else {
+    if (($translate.storage().get($translate.storageKey()) === "undefined")||($translate.storage().get($translate.storageKey()) === undefined)){
       $translate.use(AuctionConfig.default_lang);
       $scope.lang = AuctionConfig.default_lang;
+    } else {
+      $scope.lang = $translate.storage().get($translate.storageKey())||$scope.lang;
     }
+
     $scope.$on('timer-tick', function(event){
       if (($scope.auction_doc)&&(event.targetScope.timerid == 1)) {
         $timeout(function() {
@@ -41,10 +43,9 @@ angular.module('auction').controller('AuctionController', [
         var date = new Date();
         $scope.seconds_line = AuctionUtils.polarToCartesian(24, 24, 16, (date.getSeconds()/60)*360);
         $scope.minutes_line = AuctionUtils.polarToCartesian(24, 24, 16, (date.getMinutes()/60)*360);
-        $scope.hours_line = AuctionUtils.polarToCartesian(24, 24, 14, (date.getHours()/60)*360);
-      };
-
-    })
+        $scope.hours_line = AuctionUtils.polarToCartesian(24, 24, 14, (date.getHours()/12)*360);
+      }
+    });
     $scope.format_date = AuctionUtils.format_date;
     $scope.bidder_id = null;
     $scope.$on('kick_client', function(event, client_id, msg) {
@@ -179,7 +180,7 @@ angular.module('auction').controller('AuctionController', [
             $scope.follow_login = true;
           } else {
             $scope.follow_login = false;
-            $timeout(function() {$scope.follow_login = true}, ($rootScope.progres_timer.countdown_seconds - 900)* 1000);
+            $timeout(function() {$scope.follow_login = true;}, ($rootScope.progres_timer.countdown_seconds - 900)* 1000);
           }
           $scope.login_params = params;
           delete $scope.login_params.wait;
@@ -270,7 +271,7 @@ angular.module('auction').controller('AuctionController', [
         };
         $scope.auction_doc.stages.forEach(filter_func);
         $scope.auction_doc.initial_bids.forEach(filter_func);
-        $scope.minimal_bid = bids.sort(function(a, b){return a-b})[0];
+        $scope.minimal_bid = bids.sort(function(a, b){return a-b;})[0];
       }
     };
     $scope.start_sync = function () {
@@ -350,7 +351,6 @@ angular.module('auction').controller('AuctionController', [
           $scope.Rounds.push(index);
         }
       });
-
     };
     $scope.scroll_to_stage = function () {
       AuctionUtils.scroll_to_stage($scope.auction_doc, $scope.Rounds);
@@ -410,7 +410,7 @@ angular.module('auction')
                 ctrl.$parsers.unshift(function(viewValue) {
                     var plainNumber = (viewValue || "").replace(/ /g, '');
                     ctrl.$viewValue = $filter('formatnumber')(plainNumber);
-                    ctrl.$render()
+                    ctrl.$render();
                     return plainNumber;
                 });
             }
@@ -432,4 +432,4 @@ angular.module('auction')
       restrict: 'E',
       replace: true
     };
-  })
+  });

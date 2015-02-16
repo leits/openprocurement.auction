@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 import os
 
-version = '1.0.0.dev61'
+version = '1.0.0.dev72'
 
 setup(name='openprocurement.auction',
       version=version,
@@ -40,7 +40,8 @@ setup(name='openprocurement.auction',
           'Flask-Assets',
           'cssmin',
           'jsmin',
-          'PyYAML'
+          'PyYAML',
+          'request_id_middleware'
       ],
       entry_points={
           'console_scripts': [
