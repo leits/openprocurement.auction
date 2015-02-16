@@ -152,10 +152,13 @@ def get_latest_start_bid_for_bidder(bids, bidder):
 def get_tender_data(tender_url, user="", password="", retry_count=10):
     """
     >>> with requests_mock.Mocker() as m:
-    ...    m.register_uri('GET', 'mock://test.com', [{'text': '{}', 'status_code': 500}, {'text': '{}', 'status_code': 403}, {'text': '{}', 'status_code': 400}, {'text': '{}', 'status_code': 200}])
-    ...    get_tender_data('mock://test.com', user="user", password="password", retry_count=10) # doctest: +ELLIPSIS 
-    <requests_mock.adapter._Matcher object at ... >
-    {}                                                                                 
+    ...    mocked_response = m.register_uri('GET', 'mock://test.com', [
+    ... {'text': '{}', 'status_code': 500}, 
+    ... {'text': '{}', 'status_code': 403}, 
+    ... {'text': '{}', 'status_code': 400}, 
+    ... {'text': '{"tex1":"OK"}', 'status_code': 200}])
+    ...    response = get_tender_data('mock://test.com', user="user", password="password", retry_count=10)
+    ...    assert response == {u'tex1':u'OK'}
     """
     if user or password:
         auth = (user, password)
@@ -199,10 +202,13 @@ def patch_tender_data(tender_url, data, user="", password="", retry_count=10,
                       method='patch'):
     """
     >>> with requests_mock.Mocker() as m:
-    ...    m.register_uri('PATCH', 'mock://test.com', [{'text': '{}', 'status_code': 500}, {'text': 'Cant get auction info', 'status_code': 403}, {'text': '{}', 'status_code': 400}, {'text': '{}', 'status_code': 200}])
-    ...    patch_tender_data('mock://test.com', {}, user="user", password="password", retry_count=10, method='patch') # doctest:+ELLIPSIS
-    <requests_mock.adapter._Matcher object at ... >
-    {}                                                                  
+    ...    mocked_response = m.register_uri('PATCH', 'mock://test.com', [
+    ... {'text': '{}', 'status_code': 500}, 
+    ... {'text': 'Cant get auction info', 'status_code': 403}, 
+    ... {'text': '{}', 'status_code': 400}, 
+    ... {'text': '{}', 'status_code': 200}]) 
+    ...    response = patch_tender_data('mock://test.com', {}, user="user", password="password", retry_count=10, method='patch') 
+    ...    assert response == {}
     """
     if user or password:
         auth = (user, password)
@@ -281,7 +287,12 @@ def calculate_hash(bidder_id, hash_secret):
 
 def get_lisener(port, host=''):
     """
-   
+    >>> a=get_lisener(25000, host='127.0.0.1') 
+    >>> a # doctest: +ELLIPSIS
+    <socket at ... ... sock=127.0.0.1:25000 timeout=0.0>
+    >>> b=get_lisener(25000, host='127.0.0.1') 
+    >>> b # doctest: +ELLIPSIS
+    <socket at ... ... sock=127.0.0.1:25001 timeout=0.0>
     """
     lisener = None
     while lisener is None:
