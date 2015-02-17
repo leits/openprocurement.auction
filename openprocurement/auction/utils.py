@@ -224,9 +224,9 @@ def patch_tender_data(tender_url, data=None, files=None, user="", password="",
     ... {'text': '{}', 'status_code': 500}, 
     ... {'text': 'Cant get auction info', 'status_code': 403}, 
     ... {'text': '{}', 'status_code': 400}, 
-    ... {'text': '{}', 'status_code': 200}]) 
+    ... {'text': '{"tex1":"OK"}', 'status_code': 200}]) 
     ...    response = patch_tender_data('mock://test.com', {}, user="user", password="password", retry_count=10, method='patch') 
-    ...    assert response == {}
+    ...    assert response == {u'tex1':u'OK'}
     """
     if not request_id:
         request_id = generate_request_id()
