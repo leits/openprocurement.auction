@@ -27,7 +27,8 @@ from .utils import (
     get_tender_data,
     patch_tender_data,
     calculate_hash,
-    delete_mapping
+    delete_mapping,
+    generate_request_id
 )
 
 from .templates import (
@@ -40,6 +41,7 @@ from .templates import (
     get_template
 )
 from gevent import monkey
+from yaml import safe_dump as yaml_dump
 
 monkey.patch_all()
 
@@ -91,6 +93,9 @@ class Auction(object):
         self._bids_data = {}
         self.db = Database(str(self.worker_defaults["COUCH_DATABASE"]))
         self.retries = 10
+
+    def generate_request_id(self):
+        self.request_id = generate_request_id()
 
     def get_auction_document(self):
         retries = self.retries
@@ -147,6 +152,49 @@ class Auction(object):
         )
         return date
 
+    def prepare_audit(self):
+        self.audit = {
+            "id": self.auction_doc_id,
+            "tenderId": self._auction_data["data"].get("tenderID", ""),
+            "timeline": {
+                "auction_start": {
+                    "initial_bids": []
+                },
+                "round_1": {},
+                "round_2": {},
+                "round_3": {}
+            }
+        }
+
+    def approve_audit_info_on_bid_stage(self):
+        turn_in_round = self.current_stage - (
+            self.current_round * (self.bidders_count + 1) - self.bidders_count
+        ) + 1
+        round_label = 'round_{}'.format(self.current_round)
+        turn_label = 'turn_{}'.format(turn_in_round)
+        self.audit['timeline'][round_label][turn_label] = {
+            'time': datetime.now(tzlocal()).isoformat(),
+            'bidder': self.auction_document["stages"][self.current_stage].get('bidder_id', '')
+        }
+        if self.auction_document["stages"][self.current_stage].get('changed', False):
+            self.audit['timeline'][round_label][turn_label]["bid_time"] = self.auction_document["stages"][self.current_stage]['time']
+            self.audit['timeline'][round_label][turn_label]["amount"] = self.auction_document["stages"][self.current_stage]['amount']
+
+    def approve_audit_info_on_announcement(self, approved={}):
+        self.audit['timeline']['results'] = {
+            "time": datetime.now(tzlocal()).isoformat(),
+            "bids": []
+        }
+        for bid in self.auction_document['results']:
+            bid_result_audit = {
+                'bidder': bid['bidder_id'],
+                'amount': bid['amount'],
+                'time': bid['time']
+            }
+            if approved:
+                bid_result_audit["identification"] = approved[bid['bidder_id']]
+            self.audit['timeline']['results']['bids'].append(bid_result_audit)
+
     def convert_datetime(self, datetime_stamp):
         return iso8601.parse_date(datetime_stamp).astimezone(SCHEDULER.timezone)
 
@@ -154,13 +202,15 @@ class Auction(object):
         if not self.debug:
             if prepare:
                 self._auction_data = get_tender_data(
-                    self.tender_url
+                    self.tender_url,
+                    request_id=self.request_id
                 )
             else:
                 self._auction_data = {'data': {}}
             auction_data = get_tender_data(
                 self.tender_url + '/auction',
-                user=self.worker_defaults["TENDERS_API_TOKEN"]
+                user=self.worker_defaults["TENDERS_API_TOKEN"],
+                request_id=self.request_id
             )
             if auction_data:
                 self._auction_data['data'].update(auction_data['data'])
@@ -172,11 +222,11 @@ class Auction(object):
                     self.save_auction_document()
                     logger.warning("Cancel auction: {}".format(
                         self.auction_doc_id
-                    ))
+                    ), extra={"JOURNAL_REQUEST_ID": self.request_id})
                 else:
                     logger.error("Auction {} not exists".format(
                         self.auction_doc_id
-                    ))
+                    ), extra={"JOURNAL_REQUEST_ID": self.request_id})
                 sys.exit(1)
 
         self.bidders_count = len(self._auction_data["data"]["bids"])
@@ -194,6 +244,7 @@ class Auction(object):
     ###########################################################################
 
     def prepare_auction_document(self):
+        self.generate_request_id()
         self.get_auction_info(prepare=True)
         self.get_auction_document()
         if not self.auction_document:
@@ -258,41 +309,48 @@ class Auction(object):
 
     def set_auction_and_participation_urls(self):
         if parse_version(self.worker_defaults['TENDERS_API_VERSION']) < parse_version('0.6'):
-            logger.info("Version of API not support setup auction url.")
+            logger.info(
+                "Version of API not support setup auction url.",
+                extra={"JOURNAL_REQUEST_ID": self.request_id}
+            )
             return None
-        auctionUrl = self.worker_defaults["AUCTIONS_URL"].format(
+        auction_url = self.worker_defaults["AUCTIONS_URL"].format(
             auction_id=self.auction_doc_id
         )
         logger.info("Set auction and participation urls in {} to {}".format(
-            self.tender_url, auctionUrl)
+            self.tender_url, auction_url),
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
         )
-        patch_data = {"data": {"auctionUrl": auctionUrl, "bids": []}}
+        patch_data = {"data": {"auctionUrl": auction_url, "bids": []}}
         for bid in self._auction_data["data"]["bids"]:
-            participationUrl = self.worker_defaults["AUCTIONS_URL"].format(
+            participation_url = self.worker_defaults["AUCTIONS_URL"].format(
                 auction_id=self.auction_doc_id
             )
-            participationUrl += '/login?bidder_id={}&hash={}'.format(
+            participation_url += '/login?bidder_id={}&hash={}'.format(
                 bid["id"],
                 calculate_hash(bid["id"], self.worker_defaults["HASH_SECRET"])
             )
             patch_data['data']['bids'].append(
-                {"participationUrl": participationUrl,
+                {"participationUrl": participation_url,
                  "id": bid["id"]}
             )
         patch_tender_data(self.tender_url + '/auction', patch_data,
-                          user=self.worker_defaults["TENDERS_API_TOKEN"])
+                          user=self.worker_defaults["TENDERS_API_TOKEN"],
+                          request_id=self.request_id)
 
     def prepare_tasks(self):
         cmd = deepcopy(sys.argv)
         cmd[0] = os.path.abspath(cmd[0])
         cmd[1] = 'run'
         home_dir = os.path.expanduser('~')
-        logger.info("Get data from {}".format(self.tender_url))
         with open(os.path.join(home_dir,
                   SYSTEMD_RELATIVE_PATH.format(self.auction_doc_id, 'service')),
                   'w') as service_file:
             template = get_template('systemd.service')
-            logger.info("Write configuration to {}".format(service_file.name))
+            logger.info(
+                "Write configuration to {}".format(service_file.name),
+                extra={"JOURNAL_REQUEST_ID": self.request_id}
+            )
             service_file.write(
                 template.render(cmd=' '.join(cmd),
                                 description='Auction ' + self._auction_data["data"]['tenderID'],
@@ -302,33 +360,56 @@ class Auction(object):
         start_time = (self.startDate - timedelta(minutes=15)).astimezone(tzlocal())
         extra_start_time = datetime.now(tzlocal()) + timedelta(seconds=15)
         if extra_start_time > start_time:
-            logger.warning('Planned auction\'s starts date in the past')
+            logger.warning(
+                'Planned auction\'s starts date in the past',
+                extra={"JOURNAL_REQUEST_ID": self.request_id}
+            )
             start_time = extra_start_time
             if start_time > self.startDate:
-                logger.error('We not have a time to start auction')
+                logger.error(
+                    'We not have a time to start auction',
+                    extra={"JOURNAL_REQUEST_ID": self.request_id}
+                )
                 sys.exit()
 
         with open(os.path.join(home_dir, SYSTEMD_RELATIVE_PATH.format(self.auction_doc_id, 'timer')), 'w') as timer_file:
             template = get_template('systemd.timer')
-            logger.info("Write configuration to {}".format(timer_file.name))
+            logger.info(
+                "Write configuration to {}".format(timer_file.name),
+                extra={"JOURNAL_REQUEST_ID": self.request_id}
+            )
             timer_file.write(template.render(
                 timestamp=start_time.strftime("%Y-%m-%d %H:%M:%S"),
                 description='Auction ' + self._auction_data["data"]['tenderID'])
             )
-        logger.info("Reload Systemd")
+        logger.info(
+            "Reload Systemd",
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
+        )
         response = call(['/usr/bin/systemctl', '--user', 'daemon-reload'])
-        logger.info("Systemctl return code: {}".format(response))
-        logger.info("Start timer")
+        logger.info(
+            "Systemctl return code: {}".format(response),
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
+        )
+        logger.info(
+            "Start timer",
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
+        )
         response = call(['/usr/bin/systemctl', '--user',
                          'reload-or-restart', 'auction_' + '.'.join([self.auction_doc_id, 'timer'])])
-        logger.info("Systemctl return code: {}".format(response))
+        logger.info(
+            "Systemctl return code: {}".format(response),
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
+        )
 
     ###########################################################################
     #                       Runtime methods
     ###########################################################################
 
     def schedule_auction(self):
+        self.generate_request_id()
         self.get_auction_info()
+        self.prepare_audit()
         self.get_auction_document()
         round_number = 0
         SCHEDULER.add_job(
@@ -371,7 +452,10 @@ class Auction(object):
                     name="End of Pause Stage: [{} -> {}]".format(index - 1, index)
                 )
             round_number += 1
-        logger.info("Prepare server ...")
+        logger.info(
+            "Prepare server ...",
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
+        )
         self.server = run_server(self, self.convert_datetime(
             self.auction_document['stages'][index]['start']
         ), logger)
@@ -380,7 +464,12 @@ class Auction(object):
         self._end_auction_event.wait()
 
     def start_auction(self, switch_to_round=None):
-        logger.info('---------------- Start auction ----------------')
+        self.generate_request_id()
+        self.audit['timeline']['auction_start']['time'] = datetime.now(tzlocal()).isoformat()
+        logger.info(
+            '---------------- Start auction ----------------',
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
+        )
         self.get_auction_info()
         self.get_auction_document()
         # Initital Bids
@@ -388,6 +477,14 @@ class Auction(object):
         self.auction_document["initial_bids"] = []
         bids_info = sorting_start_bids_by_amount(bids)
         for index, bid in enumerate(bids_info):
+            self.audit['timeline']['auction_start']['initial_bids'].append(
+                {
+                    "bidder": bid["id"],
+                    "date": bid["date"],
+                    "amount": bid["value"]["amount"]
+                }
+            )
+
             self.auction_document["initial_bids"].append(
                 json.loads(INITIAL_BIDS_TEMPLATE.render(
                     time=bid["date"] if "date" in bid else self.startDate,
@@ -413,7 +510,11 @@ class Auction(object):
         self.save_auction_document()
 
     def end_first_pause(self, switch_to_round=None):
-        logger.info('---------------- End First Pause ----------------')
+        self.generate_request_id()
+        logger.info(
+            '---------------- End First Pause ----------------',
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
+        )
         self.bids_actions.acquire()
         self.get_auction_document()
 
@@ -426,14 +527,22 @@ class Auction(object):
         self.bids_actions.release()
 
     def end_bids_stage(self, switch_to_round=None):
+        self.generate_request_id()
         self.bids_actions.acquire()
         self.get_auction_document()
-        logger.info('---------------- End Bids Stage ----------------')
+        logger.info(
+            '---------------- End Bids Stage ----------------',
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
+        )
+
+        self.current_round = self.get_round_number(
+            self.auction_document["current_stage"]
+        )
+        self.current_stage = self.auction_document["current_stage"]
+
         if self.approve_bids_information():
-            current_round = self.get_round_number(
-                self.auction_document["current_stage"]
-            )
-            start_stage, end_stage = self.get_round_stages(current_round)
+
+            start_stage, end_stage = self.get_round_stages(self.current_round)
             all_bids = deepcopy(
                 self.auction_document["stages"][start_stage:end_stage]
             )
@@ -447,20 +556,27 @@ class Auction(object):
             )
             self.update_future_bidding_orders(minimal_bids)
 
+        self.approve_audit_info_on_bid_stage()
+
         if isinstance(switch_to_round, int):
             self.auction_document["current_stage"] = switch_to_round
         else:
             self.auction_document["current_stage"] += 1
-            
+
         logger.info('---------------- Start stage {0} ----------------'.format(
-            self.auction_document["current_stage"])
+            self.auction_document["current_stage"]),
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
         )
         if self.auction_document["current_stage"] == (len(self.auction_document["stages"]) - 1):
             self.end_auction()
+
         self.save_auction_document()
         self.bids_actions.release()
+        if self.auction_document["current_stage"] == (len(self.auction_document["stages"]) - 1):
+            self._end_auction_event.set()
 
     def next_stage(self, switch_to_round=None):
+        self.generate_request_id()
         self.bids_actions.acquire()
         self.get_auction_document()
 
@@ -471,11 +587,15 @@ class Auction(object):
         self.save_auction_document()
         self.bids_actions.release()
         logger.info('---------------- Start stage {0} ----------------'.format(
-            self.auction_document["current_stage"])
+            self.auction_document["current_stage"]),
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
         )
 
     def end_auction(self):
-        logger.info('---------------- End auction ----------------')
+        logger.info(
+            '---------------- End auction ----------------',
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
+        )
         start_stage, end_stage = self.get_round_stages(ROUNDS)
         minimal_bids = deepcopy(
             self.auction_document["stages"][start_stage:end_stage]
@@ -485,46 +605,54 @@ class Auction(object):
         for item in minimal_bids:
             self.auction_document["results"].append(generate_resuls(item))
         self.auction_document["current_stage"] = (len(self.auction_document["stages"]) - 1)
-        logger.info(' '.join((
-            'Document in end_stage:', repr(self.auction_document)
-        )))
+        logger.debug(' '.join((
+            'Document in end_stage: \n', yaml_dump(dict(self.auction_document))
+        )), extra={"JOURNAL_REQUEST_ID": self.request_id})
         if self.debug:
-            logger.info('Debug: put_auction_data disabled !!!')
+            logger.debug(
+                'Debug: put_auction_data disabled !!!',
+                extra={"JOURNAL_REQUEST_ID": self.request_id}
+            )
         else:
             self.put_auction_data()
-        logger.info("Clear mapping")
+        logger.debug(
+            "Clear mapping", extra={"JOURNAL_REQUEST_ID": self.request_id}
+        )
         delete_mapping(self.worker_defaults["REDIS_URL"],
                        self.auction_doc_id)
-        logger.info("Stop server")
+        logger.debug("Stop server", extra={"JOURNAL_REQUEST_ID": self.request_id})
         if self.server:
             self.server.stop()
-        logger.info("Fire 'stop auction worker' event")
-        self._end_auction_event.set()
+        logger.debug(
+            "Fire 'stop auction worker' event",
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
+        )
 
     def approve_bids_information(self):
-        current_stage = self.auction_document["current_stage"]
-
-        if current_stage in self._bids_data:
+        if self.current_stage in self._bids_data:
             logger.debug(
-                "Current stage bids {}".format(self._bids_data[current_stage])
+                "Current stage bids {}".format(self._bids_data[self.current_stage]),
+                extra={"JOURNAL_REQUEST_ID": self.request_id}
             )
 
             bid_info = get_latest_bid_for_bidder(
-                self._bids_data[current_stage],
-                self.auction_document["stages"][current_stage]['bidder_id']
+                self._bids_data[self.current_stage],
+                self.auction_document["stages"][self.current_stage]['bidder_id']
             )
             if bid_info['amount'] == -1:
                 logger.info(
-                    "Latest bid is bid cancellation: {}".format(bid_info)
+                    "Latest bid is bid cancellation: {}".format(bid_info),
+                    extra={"JOURNAL_REQUEST_ID": self.request_id}
                 )
                 return False
             bid_info = {key: bid_info[key] for key in BIDS_KEYS_FOR_COPY}
             bid_info["bidder_name"] = self.mapping[bid_info['bidder_id']]
-            self.auction_document["stages"][current_stage] = generate_bids_stage(
-                self.auction_document["stages"][current_stage],
+            self.auction_document["stages"][self.current_stage] = generate_bids_stage(
+                self.auction_document["stages"][self.current_stage],
                 bid_info
             )
-            self.auction_document["stages"][current_stage]["changed"] = True
+            self.auction_document["stages"][self.current_stage]["changed"] = True
+
             return True
         else:
             return False
@@ -547,8 +675,34 @@ class Auction(object):
             self.auction_document["results"].append(generate_resuls(item))
 
     def put_auction_data(self):
+        doc_id = None
+        self.approve_audit_info_on_announcement()
+        if parse_version(self.worker_defaults['TENDERS_API_VERSION']) > parse_version('0.6'):
+            files = {'file': ('audit.yaml', yaml_dump(self.audit, default_flow_style=False))}
+            response = patch_tender_data(
+                self.tender_url + '/documents', files=files,
+                user=self.worker_defaults["TENDERS_API_TOKEN"],
+                method='post', request_id=self.request_id,
+                retry_count=2
+            )
+            if response:
+                doc_id = response["data"]['id']
+                logger.info(
+                    "Audit log approved. Document id: {}".format(doc_id),
+                    extra={"JOURNAL_REQUEST_ID": self.request_id}
+                )
+            else:
+                logger.warning(
+                    "Audit log not approved.",
+                    extra={"JOURNAL_REQUEST_ID": self.request_id}
+                )
+
         all_bids = self.auction_document["results"]
-        logger.info("Approved data: {}".format(all_bids))
+        logger.info(
+            "Approved data: {}".format(all_bids),
+            extra={"JOURNAL_REQUEST_ID": self.request_id}
+        )
+
         for index, bid_info in enumerate(self._auction_data["data"]["bids"]):
             auction_bid_info = get_latest_bid_for_bidder(all_bids, bid_info["id"])
             self._auction_data["data"]["bids"][index]["value"]["amount"] = auction_bid_info["amount"]
@@ -561,26 +715,54 @@ class Auction(object):
             results_submit_method = 'patch'
         else:
             results_submit_method = 'post'
+
         results = patch_tender_data(
-            self.tender_url + '/auction', data,
+            self.tender_url + '/auction', data=data,
             user=self.worker_defaults["TENDERS_API_TOKEN"],
-            method=results_submit_method
+            method=results_submit_method,
+            request_id=self.request_id
         )
         if results:
-            bidders = dict([(bid["id"], bid["tenderers"][0]["name"])
-                            for bid in results["data"]["bids"]])
+            bids_dict = dict([(bid["id"], bid["tenderers"])
+                              for bid in results["data"]["bids"]])
             for section in ['initial_bids', 'stages', 'results']:
                 for index, stage in enumerate(self.auction_document[section]):
-                    if 'bidder_id' in stage and stage['bidder_id'] in bidders:
-                        self.auction_document[section][index]["label"]["uk"] = bidders[stage['bidder_id']]
-                        self.auction_document[section][index]["label"]["ru"] = bidders[stage['bidder_id']]
-                        self.auction_document[section][index]["label"]["en"] = bidders[stage['bidder_id']]
+                    if 'bidder_id' in stage and stage['bidder_id'] in bids_dict:
+                        self.auction_document[section][index]["label"]["uk"] = bids_dict[stage['bidder_id']][0]["name"]
+                        self.auction_document[section][index]["label"]["ru"] = bids_dict[stage['bidder_id']][0]["name"]
+                        self.auction_document[section][index]["label"]["en"] = bids_dict[stage['bidder_id']][0]["name"]
+
+            if (doc_id)and(parse_version(self.worker_defaults['TENDERS_API_VERSION']) > parse_version('0.6')):
+                self.approve_audit_info_on_announcement(approved=bids_dict)
+                files = {'file': ('audit.yaml', yaml_dump(self.audit, default_flow_style=False))}
+                response = patch_tender_data(
+                    self.tender_url + '/documents/{}'.format(doc_id), files=files,
+                    user=self.worker_defaults["TENDERS_API_TOKEN"],
+                    method='put', request_id=self.request_id,
+                    retry_count=2
+                )
+                if response:
+                    doc_id = response["data"]['id']
+                    logger.info(
+                        "Audit log approved. Document id: {}".format(doc_id),
+                        extra={"JOURNAL_REQUEST_ID": self.request_id}
+                    )
+                else:
+                    logger.warning(
+                        "Audit log not approved.",
+                        extra={"JOURNAL_REQUEST_ID": self.request_id}
+                    )
+        else:
+            logger.error(
+                "Auctions results not approved",
+                extra={"JOURNAL_REQUEST_ID": self.request_id}
+            )
 
 
 def cleanup():
     now = datetime.now()
     now = now.replace(now.year, now.month, now.day, 0, 0, 0)
-    systemd_files_dir =  os.path.join(os.path.expanduser('~'), SYSTEMD_DIRECORY)
+    systemd_files_dir = os.path.join(os.path.expanduser('~'), SYSTEMD_DIRECORY)
     for (dirpath, dirnames, filenames) in os.walk(systemd_files_dir):
         for filename in filenames:
             if filename.startswith('auction_') and filename.endswith('.timer'):
@@ -603,6 +785,7 @@ def cleanup():
                             extra={'JOURNAL_TENDER_ID': tender_id}
                         )
                         os.remove(full_filename)
+
 
 def main():
     parser = argparse.ArgumentParser(description='---- Auction ----')

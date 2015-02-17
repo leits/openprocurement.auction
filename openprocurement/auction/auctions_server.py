@@ -1,6 +1,6 @@
 from datetime import datetime
 from design import sync_design, endDate_view
-from flask import Flask, render_template, request, abort, url_for, redirect
+from flask import Flask, render_template, request, abort, url_for, redirect, Response
 from flask.ext.assets import Environment, Bundle
 from flask_redis import Redis
 from gevent import monkey
@@ -10,7 +10,7 @@ from urlparse import urljoin
 from wsgiproxy import HostProxy
 import couchdb
 import time
-from .utils import calculate_hash
+from sse import Sse as PySse
 
 monkey.patch_all()
 
@@ -123,17 +123,27 @@ def auctions_proxy(auction_doc_id, path):
             url_for('auction_url', auction_doc_id=auction_doc_id,
                     wait=1, **request.args)
         ))
+    elif path == 'event_source':
+        events_close = PySse()
+        events_close.add_message("Close", "Disable")
+        return Response(
+            events_close,
+            mimetype='text/event-stream',
+            content_type='text/event-stream'
+        )
     return abort(404)
 
 
 @auctions_server.route('/get_current_server_time')
 def auctions_server_current_server_time():
-    return datetime.now(auctions_server.config['TIMEZONE']).isoformat()
+    response = Response(datetime.now(auctions_server.config['TIMEZONE']).isoformat())
+    response.headers['Cache-Control'] = 'public, max-age=0'
+    return response
 
 
 def couch_server_proxy(path):
     return make_proxy(
-        {}, auctions_server.config['INT_COUCH_URL'], allowed_request_methods="",
+        {}, auctions_server.config['PROXY_COUCH_URL'], allowed_request_methods="",
         suppress_http_headers="")
 
 
@@ -141,6 +151,7 @@ def make_auctions_app(global_conf,
                       redis_url='redis://localhost:7777/0',
                       external_couch_url='http://localhost:5000/auction',
                       internal_couch_url='http://localhost:9000/',
+                      proxy_internal_couch_url='http://localhost:9000/',
                       auctions_db='auctions',
                       hash_secret_key='',
                       timezone='Europe/Kiev',
@@ -172,6 +183,7 @@ def make_auctions_app(global_conf,
         couch_server_proxy,
         methods=['GET'], defaults={'path': ''})
     auctions_server.config['INT_COUCH_URL'] = internal_couch_url
+    auctions_server.config['PROXY_COUCH_URL'] = proxy_internal_couch_url
     auctions_server.config['COUCH_DB'] = auctions_db
     auctions_server.config['TIMEZONE'] = tz(timezone)
     auctions_server.redis = Redis(auctions_server)
