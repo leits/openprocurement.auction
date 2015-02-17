@@ -6,8 +6,6 @@ import logging
 import json
 import requests
 from hashlib import sha1
-from mock import Mock
-import requests_mock
 
 from gevent.pywsgi import WSGIServer
 from gevent.baseserver import parse_address
@@ -160,6 +158,7 @@ def get_latest_start_bid_for_bidder(bids, bidder):
 def get_tender_data(tender_url, user="", password="", retry_count=10,
                     request_id=None):
     """
+    >>> import requests_mock
     >>> with requests_mock.Mocker() as m:
     ...    mocked_response = m.register_uri('GET', 'mock://test.com', [
     ... {'text': '{}', 'status_code': 500}, 
@@ -219,6 +218,7 @@ def get_tender_data(tender_url, user="", password="", retry_count=10,
 def patch_tender_data(tender_url, data=None, files=None, user="", password="",
                       retry_count=10, method='patch', request_id=None):
     """
+    >>> import requests_mock
     >>> with requests_mock.Mocker() as m:
     ...    mocked_response = m.register_uri('PATCH', 'mock://test.com', [
     ... {'text': '{}', 'status_code': 500}, 
@@ -288,15 +288,11 @@ def patch_tender_data(tender_url, data=None, files=None, user="", password="",
 
 def do_until_success(func, args=(), kw={}, repeat=10, sleep_seconds=10):
     """
-    >>> do_until_success(calculate_hash, args=('1234','5678'), kw={}, repeat=5, sleep_seconds=10)
-    '85512f17e19d85600a7e92175fc16d0c3d900661'
-    >>> do_until_success(calculate_hash, args=(), kw={}, repeat=1, sleep_seconds=5)
-    
-    
-    
-    
-    
-    ERROR:root:Error calculate_hash() takes exactly 2 arguments (0 given) 
+    >>> from mock import MagicMock
+    >>> test_function = MagicMock(side_effect=(ValueError,1))
+    >>> result = do_until_success(test_function, sleep_seconds=1)
+    >>> result == 1
+    True
     """
     while True:
         try:
