@@ -51,6 +51,11 @@ def filter_by_bidder_id(bids, bidder_id):
 
 def filter_start_bids_by_bidder_id(bids, bidder):
     """
+    >>> bids = [{"bidders":[{"id":{"name": "22222"}},]}, {"bidders":[{"id":{"name": "1111"}},]},]
+    >>> filter_start_bids_by_bidder_id(bids, "22222")
+    [{'bidders': [{'id': {'name': '22222'}}]}]
+    >>> filter_start_bids_by_bidder_id(bids, 22222)
+    []
     """
     return [bid for bid in bids
             if bid['bidders'][0]['id']['name'] == bidder]
@@ -138,21 +143,53 @@ def sorting_start_bids_by_amount(bids, reverse=True):
 
 
 def sorting_by_time(bids, reverse=True):
+    """
+    >>> bids = [{"time": "2015-01-04T15:40:44Z", 'bidder_id': '1'},
+    ... {"time": "2015-01-04T15:42:44Z", 'bidder_id': '2'},
+    ... {"time": "2015-01-04T15:44:44Z", 'bidder_id': '3'}]
+
+    >>> sorting_by_time(bids, reverse=True) # doctest: +NORMALIZE_WHITESPACE
+    [{'bidder_id': '3', 'time': '2015-01-04T15:44:44Z'},
+    {'bidder_id': '2', 'time': '2015-01-04T15:42:44Z'},
+    {'bidder_id': '1', 'time': '2015-01-04T15:40:44Z'}]
+    """
     return sorted(bids, key=get_time, reverse=reverse)
 
 
 def get_latest_bid_for_bidder(bids, bidder_id):
+    """
+    >>> bids = [
+    ... {"bidder_id": "1", "amount": 100, "time": "2015-01-04T15:40:44Z",},
+    ... {"bidder_id": "1", "amount": 200, "time": "2015-01-04T15:40:42Z",},
+    ... {"bidder_id": "2", "amount": 101,"time": "2015-01-04T15:40:44Z",}]
+
+    >>> get_latest_bid_for_bidder (bids, '1')
+    {'amount': 100, 'bidder_id': '1', 'time': '2015-01-04T15:40:44Z'}
+    """
     return sorted(filter_by_bidder_id(bids, bidder_id),
                   key=get_time, reverse=True)[0]
 
 
 def get_latest_start_bid_for_bidder(bids, bidder):
+
     return sorted(filter_start_bids_by_bidder_id(bids, bidder),
                   key=get_time, reverse=True)[0]
 
 
 def get_tender_data(tender_url, user="", password="", retry_count=10,
                     request_id=None):
+    """
+    >>> import requests_mock
+    >>> with requests_mock.Mocker() as m:
+    ...    mocked_response = m.register_uri('GET', 'mock://test.com', [
+    ... {'text': '{}', 'status_code': 500},
+    ... {'text': '{}', 'status_code': 403},
+    ... {'text': '{}', 'status_code': 400},
+    ... {'text': '{"tex1":"OK"}', 'status_code': 200}])
+    ...    response = get_tender_data('mock://test.com', user="user", password="password", retry_count=10)
+    ...    response == {u'tex1':u'OK'}
+    True
+    """
     if not request_id:
         request_id = generate_request_id()
     extra_headers = {'content-type': 'application/json', 'X-Client-Request-ID': request_id}
@@ -200,12 +237,23 @@ def get_tender_data(tender_url, user="", password="", retry_count=10,
 
 def patch_tender_data(tender_url, data=None, files=None, user="", password="",
                       retry_count=10, method='patch', request_id=None):
+    """
+    >>> import requests_mock
+    >>> with requests_mock.Mocker() as m:
+    ...    mocked_response = m.register_uri('PATCH', 'mock://test.com', [
+    ... {'text': '{}', 'status_code': 500},
+    ... {'text': 'Cant get auction info', 'status_code': 403},
+    ... {'text': '{}', 'status_code': 400},
+    ... {'text': '{"tex1":"OK"}', 'status_code': 200}])
+    ...    response = patch_tender_data('mock://test.com', {}, user="user", password="password", retry_count=10, method='patch')
+    ...    response == {u'tex1':u'OK'}
+    True
+    """
     if not request_id:
         request_id = generate_request_id()
     extra_headers = {'X-Client-Request-ID': request_id}
     if data:
         extra_headers['content-type'] = 'application/json'
-
     if user or password:
         auth = (user, password)
     else:
@@ -257,7 +305,14 @@ def patch_tender_data(tender_url, data=None, files=None, user="", password="",
         sleep(pow(iteration, 2))
 
 
-def do_until_success(func, args=(), kw={}, repeat=10):
+def do_until_success(func, args=(), kw={}, repeat=10, sleep_seconds=10):
+    """
+    >>> from mock import MagicMock
+    >>> test_function = MagicMock(side_effect=(ValueError,1))
+    >>> result = do_until_success(test_function, sleep_seconds=1)
+    >>> result == 1
+    True
+    """
     for iteration in xrange(repeat):
         try:
             return func(*args, **kw)
@@ -275,12 +330,24 @@ def do_until_success(func, args=(), kw={}, repeat=10):
 
 
 def calculate_hash(bidder_id, hash_secret):
+    """
+    >>> calculate_hash('1234', '5678')
+    '85512f17e19d85600a7e92175fc16d0c3d900661'
+    """
     digest = sha1(hash_secret)
     digest.update(bidder_id)
     return digest.hexdigest()
 
 
 def get_lisener(port, host=''):
+    """
+    >>> socket_a = get_lisener(25000, host='127.0.0.1')
+    >>> socket_a.getsockname()[1] == 25000
+    True
+    >>> socket_b = get_lisener(25000, host='127.0.0.1')
+    >>> socket_b.getsockname()[1] == 25001
+    True
+    """
     lisener = None
     while lisener is None:
         family, address = parse_address((host, port))
@@ -303,6 +370,11 @@ def delete_mapping(redis_url, auction_id):
 
 
 def prepare_extra_journal_fields(headers):
+    """
+    >>> headers = {'X-Request-ID':'1','X-Clint-Request-ID':'2'}
+    >>> prepare_extra_journal_fields(headers)
+    {'JOURNAL_CLIENT_REQUEST_ID': '2', 'JOURNAL_REQUEST_ID': '1'}
+    """
     extra = {}
     for key in EXTRA_LOGGING_VALUES:
         if key in headers:
