@@ -908,6 +908,17 @@ class Auction(object):
             logger.info("Auction {} not found".format(self.auction_doc_id),
                         extra={'MESSAGE_ID': AUCTION_WORKER_SERVICE_AUCTION_NOT_FOUND})
 
+    def reschedule_auction(self):
+        self.generate_request_id()
+        if self.get_auction_document():
+            logger.info("Auction {} has not started and will be rescheduled".format(self.auction_doc_id),
+                        extra={'MESSAGE_ID': AUCTION_WORKER_SERVICE_AUCTION_RESCHEDULE})
+            self.auction_document["current_stage"] = -101
+            self.save_auction_document()
+        else:
+            logger.info("Auction {} not found".format(self.auction_doc_id),
+                        extra={'MESSAGE_ID': AUCTION_WORKER_SERVICE_AUCTION_NOT_FOUND})
+
 
 def cleanup():
     today_datestamp = datetime.now()
@@ -1026,6 +1037,8 @@ def main():
         auction.activate_systemd_unit()
     elif args.cmd == 'cancel':
         auction.cancel_auction()
+    elif args.cmd == 'reschedule':
+        auction.reschedule_auction()
     elif args.cmd == 'cleanup':
         cleanup()
 
